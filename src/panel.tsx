@@ -5,7 +5,6 @@ import {
   Box,
   Button,
   Callout,
-  Card,
   Code,
   CodeView,
   Collapsible,
@@ -17,7 +16,6 @@ import {
   KeyValue,
   List,
   ListItem,
-  on,
   plugin,
   read,
   RelativeTime,
@@ -36,6 +34,7 @@ import {
   Toolbar,
   Tree,
   update,
+  type OrcaNode,
   type PanelContext,
   type TableColumn,
   type TableRow,
@@ -61,7 +60,7 @@ const sceneQueryAtom = atom<string>('sceneQuery', '')
 const pinnedOnlyAtom = atom<boolean>('pinnedOnly', false)
 const sceneViewModeAtom = atom<'list' | 'tree'>('sceneViewMode', 'list')
 const selectedTreeKeyAtom = atom<string>('selectedTreeKey', '')
-const expandedTreeKeysAtom = atom<string[]>('expandedTreeKeys', ['scenes'])
+const expandedTreeKeysAtom = atom<string[]>('expandedTreeKeys', ['dir:scenes'])
 
 const codeQueryAtom = atom<string>('codeQuery', '')
 const codeKindFilterAtom = atom<string>('codeKindFilter', 'all')
@@ -119,9 +118,13 @@ function showResultBanner(res: { ok: boolean; message: string }): void {
 }
 
 async function handleSelectProject(projectRelPath: string): Promise<void> {
-  await runAction('Switching project', () =>
-    plugin.request('godot.selectProject', { projectRelPath }),
-    (snap) => set(snapshotAtom, snap)
+  await runAction(
+    'Switching project',
+    () => plugin.request('godot.selectProject', { projectRelPath }),
+    (snap) => {
+      set(bannerAtom, null)
+      set(snapshotAtom, snap)
+    }
   )
 }
 
@@ -280,37 +283,68 @@ function kindLabel(kind: GodotCodeFileItem['kind']): string {
 }
 
 // --- Sub-views ---
+/** Compact bordered section; tighter than Card for a narrow sidebar. */
+function Section(props: { title: string; aside?: OrcaNode; children?: OrcaNode }) {
+  return (
+    <Box border radius="md" padding="sm" gap="xs" background="card">
+      <Row justify="between" align="center" gap="xs">
+        <Text size="sm" weight="semibold">
+          {props.title}
+        </Text>
+        {props.aside ?? null}
+      </Row>
+      {props.children}
+    </Box>
+  )
+}
+
+function StatTile(props: { label: string; value: number }) {
+  return (
+    <Box border radius="sm" paddingX="sm" paddingY="xs" background="card">
+      <Text size="md" weight="semibold">
+        {props.value}
+      </Text>
+      <Text size="xs" muted>
+        {props.label}
+      </Text>
+    </Box>
+  )
+}
+
+function baseName(path: string): string {
+  return path.split('/').pop() ?? path
+}
+
 function SceneRowCard(props: {
   scene: GodotSceneItem
   pinned: boolean
   canRun: boolean
 }) {
   const { scene, pinned, canRun } = props
+  const meta = [scene.rootType, scene.resPath.replace(/^res:\/\//, '')].filter(Boolean).join(' · ')
   return (
     <Box key={scene.resPath} border radius="sm" padding="xs" gap="xs" background="card">
       <Row justify="between" align="center" gap="xs">
-        <Stack gap="none">
-          <Row gap="xs" align="center" wrap>
+        <Box grow shrink minWidth={0}>
+          <Row gap="xs" align="center">
             <Text size="sm" weight="medium" truncate>
               {scene.name}
             </Text>
             {scene.isMain ? <Badge tone="accent">Main</Badge> : null}
-            {scene.rootType ? <Badge tone="neutral">{scene.rootType}</Badge> : null}
           </Row>
           <Text size="xs" muted truncate>
-            {scene.resPath}
+            {meta}
           </Text>
-        </Stack>
-        <Row gap="xs" align="center">
+        </Box>
+        <Box direction="row" gap="none" align="center" shrink={false}>
           <IconButton
-            icon="play"
-            label={`Run ${scene.name}`}
-            tooltip={`Run scene (${scene.resPath})`}
-            variant="solid"
-            tone="accent"
+            icon="star"
+            label={pinned ? `Unpin ${scene.name}` : `Pin ${scene.name}`}
+            tooltip={pinned ? 'Unpin scene' : 'Pin scene'}
+            variant="ghost"
+            tone={pinned ? 'warning' : 'neutral'}
             size="xs"
-            disabled={!canRun}
-            onPress={() => void handleRun(scene.resPath)}
+            onPress={() => void handleTogglePin(scene.resPath)}
           />
           <IconButton
             icon="code"
@@ -330,28 +364,27 @@ function SceneRowCard(props: {
             onPress={() => void handleOpenEditor(scene.resPath)}
           />
           <IconButton
-            icon="star"
-            label={pinned ? `Unpin ${scene.name}` : `Pin ${scene.name}`}
-            tooltip={pinned ? 'Unpin scene' : 'Pin scene'}
-            variant="ghost"
-            tone={pinned ? 'warning' : 'neutral'}
+            icon="play"
+            label={`Run ${scene.name}`}
+            tooltip={`Run scene (${scene.resPath})`}
+            variant="solid"
+            tone="accent"
             size="xs"
-            onPress={() => void handleTogglePin(scene.resPath)}
+            disabled={!canRun}
+            onPress={() => void handleRun(scene.resPath)}
           />
-        </Row>
+        </Box>
       </Row>
       {scene.scriptRelPath ? (
-        <Row justify="between" align="center" gap="xs">
-          <Text size="xs" muted truncate>
-            Script: <Code>{scene.scriptResPath ?? scene.scriptRelPath}</Code>
-          </Text>
+        <Row align="center" gap="xs">
           <Button
             variant="ghost"
             size="xs"
             icon="file-text"
+            tooltip={`Open ${scene.scriptResPath ?? scene.scriptRelPath}`}
             onPress={() => void handleOpenFile(scene.scriptRelPath!)}
           >
-            Script
+            {baseName(scene.scriptRelPath)}
           </Button>
         </Row>
       ) : null}
@@ -396,9 +429,16 @@ function DiagnosticRow(props: { diag: GodotDiagnostic; index: number }) {
 
 // --- Lifecycle ---
 export function setup(ctx: PanelContext): void {
-  let sawInitialWorkspaceEvent = false
   ctx.subscriptions.push(
     plugin.on('godot.updated', (snap) => {
+      const prev = read(snapshotAtom)
+      if (
+        prev &&
+        (prev.workspace?.id !== snap.workspace?.id ||
+          prev.selectedProjectRelPath !== snap.selectedProjectRelPath)
+      ) {
+        set(bannerAtom, null)
+      }
       set(snapshotAtom, snap)
       set(loadingAtom, false)
     })
@@ -406,15 +446,6 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(
     plugin.on('godot.status', (status) => {
       set(bannerAtom, status)
-    })
-  )
-  ctx.subscriptions.push(
-    on('workspace.changed', () => {
-      if (!sawInitialWorkspaceEvent) {
-        sawInitialWorkspaceEvent = true
-        return
-      }
-      void refreshSnapshot(true)
     })
   )
   void refreshSnapshot(false)
@@ -450,7 +481,7 @@ export default function GodotPanel() {
             icon="refresh"
             label="Refresh"
             variant="ghost"
-            size="sm"
+            size="xs"
             onPress={() => void refreshSnapshot(true)}
           />
         </Row>
@@ -476,7 +507,7 @@ export default function GodotPanel() {
             icon="refresh"
             label="Refresh"
             variant="ghost"
-            size="sm"
+            size="xs"
             onPress={() => void refreshSnapshot(true)}
           />
         </Row>
@@ -496,7 +527,7 @@ export default function GodotPanel() {
             icon="refresh"
             label="Refresh"
             variant="ghost"
-            size="sm"
+            size="xs"
             onPress={() => void refreshSnapshot(true)}
           />
         </Row>
@@ -509,7 +540,7 @@ export default function GodotPanel() {
             Rescan Workspace
           </Button>
         </EmptyState>
-        <Card title="Engine Detection">
+        <Section title="Engine Detection">
           <KeyValue
             items={[
               {
@@ -526,7 +557,7 @@ export default function GodotPanel() {
               }
             ]}
           />
-        </Card>
+        </Section>
       </Stack>
     )
   }
@@ -588,7 +619,7 @@ export default function GodotPanel() {
 
   const codeColumns: TableColumn[] = [
     { key: 'name', label: 'File', sortable: true, minWidth: 'sm' },
-    { key: 'kind', label: 'Kind', width: 'xs', sortable: true },
+    { key: 'kind', label: 'Kind', width: 'sm', sortable: true },
     { key: 'type', label: 'Class / Base', hideBelow: 'sm', sortable: true }
   ]
 
@@ -665,7 +696,7 @@ export default function GodotPanel() {
           label="Refresh project"
           tooltip="Rescan Godot project and engine status"
           variant="ghost"
-          size="sm"
+          size="xs"
           disabled={Boolean(busyAction)}
           onPress={() => void refreshSnapshot(true)}
         />
@@ -690,9 +721,9 @@ export default function GodotPanel() {
         <Button
           variant="solid"
           tone="accent"
-          size="sm"
+          size="xs"
           icon="play"
-          tooltip="Run main scene in an Orca terminal (F5)"
+          tooltip="Run main scene in an Orca terminal (Mod+F5)"
           disabled={!canRun}
           onPress={() => void handleRun()}
         >
@@ -700,7 +731,7 @@ export default function GodotPanel() {
         </Button>
         <Button
           variant="outline"
-          size="sm"
+          size="xs"
           icon="open-external"
           tooltip="Launch Godot Editor for this project"
           disabled={!canRun}
@@ -710,7 +741,7 @@ export default function GodotPanel() {
         </Button>
         <Button
           variant="outline"
-          size="sm"
+          size="xs"
           icon="check"
           tooltip="Run headless validation (--headless --quit)"
           disabled={!canRun}
@@ -719,11 +750,11 @@ export default function GodotPanel() {
           Check
         </Button>
         <IconButton
-          icon="settings"
+          icon="file-text"
           label="Open project.godot"
           tooltip="Open project.godot in Orca editor"
           variant="ghost"
-          size="sm"
+          size="xs"
           onPress={() => void handleOpenFile(project.projectFileRelPath)}
         />
       </Toolbar>
@@ -817,36 +848,18 @@ export default function GodotPanel() {
         onChange={(next) => set(activeTabAtom, next)}
       >
         {/* OVERVIEW TAB */}
-        <Tab value="overview" label="Overview" icon="gauge">
+        <Tab value="overview" label="Info">
           <Stack gap="sm">
             <Grid columns={3} gap="xs">
-              <Box border radius="sm" padding="xs" background="card">
-                <Text size="xs" muted>
-                  Scenes
-                </Text>
-                <Text size="md" weight="semibold">
-                  {project.counts.scenes}
-                </Text>
-              </Box>
-              <Box border radius="sm" padding="xs" background="card">
-                <Text size="xs" muted>
-                  Scripts
-                </Text>
-                <Text size="md" weight="semibold">
-                  {project.counts.scripts}
-                </Text>
-              </Box>
-              <Box border radius="sm" padding="xs" background="card">
-                <Text size="xs" muted>
-                  Resources
-                </Text>
-                <Text size="md" weight="semibold">
-                  {project.counts.resources + project.counts.shaders}
-                </Text>
-              </Box>
+              <StatTile label="Scenes" value={project.counts.scenes} />
+              <StatTile label="Scripts" value={project.counts.scripts} />
+              <StatTile
+                label="Resources"
+                value={project.counts.resources + project.counts.shaders}
+              />
             </Grid>
 
-            <Card title="Project">
+            <Section title="Project">
               <KeyValue
                 items={[
                   {
@@ -881,14 +894,11 @@ export default function GodotPanel() {
                   }
                 ]}
               />
-            </Card>
+            </Section>
 
             {/* Quick Launch: Pinned & Main Scene */}
             {pinnedSceneItems.length > 0 || mainSceneItem ? (
-              <Card
-                title={pinnedSceneItems.length > 0 ? 'Quick Launch (Pinned)' : 'Main Scene'}
-                description="Launch or open scenes directly."
-              >
+              <Section title={pinnedSceneItems.length > 0 ? 'Pinned Scenes' : 'Main Scene'}>
                 <Stack gap="xs">
                   {(pinnedSceneItems.length > 0
                     ? pinnedSceneItems
@@ -904,7 +914,7 @@ export default function GodotPanel() {
                     />
                   ))}
                 </Stack>
-              </Card>
+              </Section>
             ) : null}
 
             {/* Autoloads */}
@@ -937,7 +947,7 @@ export default function GodotPanel() {
                   {project.testRunner ? (
                     <Button
                       variant="outline"
-                      size="sm"
+                      size="xs"
                       icon="bug"
                       disabled={!canRun}
                       onPress={() => void handleRunTests()}
@@ -968,7 +978,7 @@ export default function GodotPanel() {
         </Tab>
 
         {/* SCENES TAB */}
-        <Tab value="scenes" label={`Scenes (${project.counts.scenes})`} icon="layers">
+        <Tab value="scenes" label="Scenes">
           <Stack gap="sm">
             <Row gap="xs" align="center">
               <Box grow>
@@ -976,7 +986,7 @@ export default function GodotPanel() {
                   label="Filter scenes"
                   labelHidden
                   type="search"
-                  placeholder="Search scenes, node types, scripts..."
+                  placeholder="Search scenes…"
                   value={read(sceneQueryAtom)}
                   onChange={(val) => set(sceneQueryAtom, val)}
                 />
@@ -1066,7 +1076,7 @@ export default function GodotPanel() {
         </Tab>
 
         {/* SCRIPTS & RESOURCES TAB */}
-        <Tab value="scripts" label="Scripts" icon="code">
+        <Tab value="scripts" label="Code">
           <Stack gap="sm">
             <Row gap="xs">
               <Box grow>
@@ -1074,7 +1084,7 @@ export default function GodotPanel() {
                   label="Filter scripts and resources"
                   labelHidden
                   type="search"
-                  placeholder="Search class_name, extends, path..."
+                  placeholder="Search code…"
                   value={read(codeQueryAtom)}
                   onChange={(val) => set(codeQueryAtom, val)}
                 />
@@ -1084,11 +1094,11 @@ export default function GodotPanel() {
                 labelHidden
                 value={codeKindFilter}
                 options={[
-                  { value: 'all', label: `All (${project.codeFiles.length})` },
+                  { value: 'all', label: 'All' },
                   { value: 'gdscript', label: 'GDScript' },
                   { value: 'csharp', label: 'C#' },
-                  { value: 'shader', label: `Shaders (${project.counts.shaders})` },
-                  { value: 'resource', label: `Resources (${project.counts.resources})` }
+                  { value: 'shader', label: 'Shaders' },
+                  { value: 'resource', label: 'Resources' }
                 ]}
                 onChange={(val) => set(codeKindFilterAtom, val)}
               />
@@ -1133,12 +1143,9 @@ export default function GodotPanel() {
         </Tab>
 
         {/* CONFIG & EXPORTS TAB */}
-        <Tab value="config" label="Config" icon="wrench">
+        <Tab value="config" label="Config">
           <Stack gap="sm">
-            <Card
-              title={`Export Presets (${project.exportPresets.length})`}
-              description="Built from export_presets.cfg"
-            >
+            <Section title={`Export Presets (${project.exportPresets.length})`}>
               {project.exportPresets.length === 0 ? (
                 <Text size="xs" muted>
                   No export_presets.cfg found. Configure export presets in the Godot Editor first.
@@ -1185,7 +1192,7 @@ export default function GodotPanel() {
                   ))}
                 </Stack>
               )}
-            </Card>
+            </Section>
 
             <Collapsible
               title={`Input Map (${project.inputActions.length})`}
@@ -1226,14 +1233,13 @@ export default function GodotPanel() {
         {/* OUTPUT & DIAGNOSTICS TAB */}
         <Tab
           value="output"
-          label={totalErrors > 0 ? `Output (${totalErrors})` : 'Output'}
-          icon="terminal"
+          label={totalErrors > 0 ? `Logs · ${totalErrors}` : 'Logs'}
         >
           <Stack gap="sm">
-            <Row gap="xs" wrap>
+            <Row gap="xs" align="center" justify="between">
               <Button
                 variant="outline"
-                size="sm"
+                size="xs"
                 icon="check"
                 disabled={!canRun}
                 onPress={() => void handleCheckHeadless()}
@@ -1241,24 +1247,24 @@ export default function GodotPanel() {
                 Run Headless Check
               </Button>
               {snap.activeSession ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon="refresh"
-                  onPress={() => void handleReadLogs()}
-                >
-                  Refresh Logs
-                </Button>
-              ) : null}
-              {snap.activeSession ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon="terminal"
-                  onPress={() => void handleFocusTerminal()}
-                >
-                  Focus Terminal
-                </Button>
+                <Row gap="none">
+                  <IconButton
+                    icon="refresh"
+                    label="Refresh Logs"
+                    tooltip="Re-read output from the Godot terminal"
+                    variant="ghost"
+                    size="xs"
+                    onPress={() => void handleReadLogs()}
+                  />
+                  <IconButton
+                    icon="terminal"
+                    label="Focus Terminal"
+                    tooltip="Focus Godot terminal pane"
+                    variant="ghost"
+                    size="xs"
+                    onPress={() => void handleFocusTerminal()}
+                  />
+                </Row>
               ) : null}
             </Row>
 
