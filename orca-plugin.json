@@ -1,0 +1,131 @@
+{
+  "manifestVersion": 2,
+  "id": "godot-companion",
+  "name": "Godot Companion",
+  "version": "0.1.0",
+  "description": "Sidebar panel and workspace integration for Godot Engine projects: inspect scenes, scripts, autoloads, input maps and export presets, launch the editor or scenes, run headless checks, and track diagnostics.",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "godot",
+        "title": "Godot",
+        "icon": "blocks",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "godot-status",
+        "text": "Godot",
+        "icon": "blocks",
+        "tone": "neutral",
+        "tooltip": "Godot Companion — click to refresh project status",
+        "command": "godot.refresh"
+      }
+    ],
+    "commands": [
+      {
+        "id": "godot.runProject",
+        "title": "Godot: Run Main Scene",
+        "when": "workspace"
+      },
+      {
+        "id": "godot.openEditor",
+        "title": "Godot: Open in Editor",
+        "when": "workspace"
+      },
+      {
+        "id": "godot.checkHeadless",
+        "title": "Godot: Run Headless Validation",
+        "when": "workspace"
+      },
+      {
+        "id": "godot.stopRun",
+        "title": "Godot: Stop Active Run",
+        "when": "workspace"
+      },
+      {
+        "id": "godot.refresh",
+        "title": "Godot: Refresh Project",
+        "when": "workspace"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      }
+    ],
+    "settings": [
+      {
+        "key": "godotBinary",
+        "title": "Godot Executable Path",
+        "description": "Optional absolute path to the Godot executable. Leave empty to auto-detect from PATH, Steam, Flatpak, or macOS Applications.",
+        "type": "string",
+        "default": "",
+        "placeholder": "/usr/local/bin/godot"
+      },
+      {
+        "key": "extraRunArgs",
+        "title": "Extra Run Arguments",
+        "description": "Additional CLI flags appended when running the project or a scene (e.g. --verbose --debug-collisions).",
+        "type": "string",
+        "default": "",
+        "placeholder": "--verbose"
+      },
+      {
+        "key": "lspPort",
+        "title": "Godot Editor LSP Port",
+        "description": "Localhost TCP port probed to detect whether the Godot Editor language server is running.",
+        "type": "integer",
+        "default": 6005,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      {
+        "key": "openEditorDetached",
+        "title": "Launch Editor Detached",
+        "description": "Start the Godot Editor as a detached OS process instead of inside an Orca terminal.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "notifyOnComplete",
+        "title": "Notify on Check & Export",
+        "description": "Show an Orca notification when headless validation completes or an export starts.",
+        "type": "boolean",
+        "default": true
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "terminal:read"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "notifications:show"
+    }
+  ]
+}
