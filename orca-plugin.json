@@ -4,6 +4,7 @@
   "name": "Godot Companion",
   "version": "0.1.0",
   "description": "Sidebar panel and workspace integration for Godot Engine projects: inspect scenes, scripts, autoloads, input maps and export presets, launch the editor or scenes, run headless checks, and track diagnostics.",
+  "icon": "images/icon.png",
   "license": "MIT",
   "engines": {
     "orca": ">=1.4.259"

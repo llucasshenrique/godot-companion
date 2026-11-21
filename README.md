@@ -1,3 +1,5 @@
+<img src="images/icon.png" alt="Godot Engine logo" width="96" align="right">
+
 # Godot Companion — Orca IDE Plugin
 
 Sidebar panel and trusted-worker integration for **Godot Engine** (3.x / 4.x) inside [Orca IDE](https://orca.stably.ai).
@@ -64,3 +66,10 @@ orca-ide plugin dev load . --json
 # Or install locally from this folder:
 orca-ide plugin install . --json
 ```
+
+## Credits
+
+The Godot Engine logo (`images/icon.svg`, `images/icon.png`) is by Andrea Calabró and is licensed
+under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); see `images/LOGO_LICENSE.txt`.
+Godot Companion is a community plugin and is not affiliated with or endorsed by the Godot
+Foundation.
