@@ -488,7 +488,7 @@ export default function GodotPanel() {
         <EmptyState
           title="No workspace focused"
           description="Focus a local Godot workspace in Orca to inspect scenes, scripts, autoloads, and run or export your project."
-          icon="blocks"
+          icon="bot"
         >
           <Button variant="outline" icon="refresh" onPress={() => void refreshSnapshot(true)}>
             Check Again
