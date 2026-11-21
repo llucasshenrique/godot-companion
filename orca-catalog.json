@@ -17,6 +17,109 @@
       ],
       "releases": [
         {
+          "version": "0.1.3",
+          "commit": "715da41f0158b3d4a91dab1f6abeecc94d81843b",
+          "contentHash": "0755cb48b4ae311cda18a3f716f255d20b85ca63274fd41d3fc5b51eefdb0dc7",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.259",
+          "name": "Godot Companion",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Godot Companion"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Main Scene"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Open in Editor"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Headless Validation"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Stop Active Run"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Refresh Project"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F5",
+              "detail": "godot.runProject"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F8",
+              "detail": "godot.stopRun"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Shift+F5",
+              "detail": "godot.checkHeadless"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Alt+G",
+              "detail": "godot.openEditor"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "Godot"
+            }
+          ],
+          "capabilities": [
+            "workspace:read",
+            "workspace:write",
+            "terminal:send",
+            "terminal:read",
+            "storage:own",
+            "settings:own",
+            "notifications:show"
+          ],
+          "images": {
+            "icon": {
+              "path": "images/icon.png",
+              "alt": "Godot Companion",
+              "sha256": "087af4c72b692790fd6836b89487f50927381705dd4a9aeb732dfb1674b0f928",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "images/cover.png",
+              "alt": "Godot logo and the Godot Companion name beside the panel's overview and headless check diagnostics",
+              "sha256": "5a7e0d02663eec0d3ab010ecd7bf29796ecbe260fa6e00857764b54375a3b2e9",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "images/screenshot-dark.png",
+                "alt": "Godot Companion panel: project overview, scene list with run actions, and headless check diagnostics",
+                "sha256": "959397e31489319a45407ec08808308cfca25aab4e57a3144d72b36867eb63fb",
+                "width": 1280,
+                "height": 800
+              },
+              {
+                "path": "images/screenshot-light.png",
+                "alt": "Godot Companion panel: project overview, scene list with run actions, and headless check diagnostics",
+                "sha256": "e94c64a90ca26f314eb8ca4aaffd62374e7ef645dda988d808b636dfb1ab0c93",
+                "width": 1280,
+                "height": 800
+              }
+            ]
+          }
+        },
+        {
           "version": "0.1.2",
           "commit": "33ed1c67a5aa6f6e10037534bba177c6b03c8bdc",
           "contentHash": "39b1ec54a539ae10dc1f33de323d8310493d788fcee604f3753fb199364db1cd",
