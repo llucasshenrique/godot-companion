@@ -5,7 +5,7 @@ import * as path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import {
   buildShellCommand,
-  joinRelPath,
+  isGodot3Version,
   parseGodotOutput,
   splitCliArgs
 } from './godot-parser.ts'
@@ -33,7 +33,7 @@ import type {
 
 const STORAGE_PINNED_PREFIX = 'pinnedScenes:'
 const STORAGE_SELECTED_PROJECT_PREFIX = 'selectedProject:'
-const STORAGE_LAST_SESSION = 'activeSession'
+const STORAGE_SESSION_PREFIX = 'activeSession:'
 
 const DEFAULT_SETTINGS: GodotSettings = {
   godotBinary: '',
@@ -48,8 +48,18 @@ export type WorkerDeps = {
   probeLspPort: (port: number) => Promise<boolean>
   findProjects: (workspacePath: string) => Promise<GodotProjectSummary[]>
   scanProject: (workspacePath: string, projectRelPath: string) => Promise<GodotProjectData>
-  runHeadlessCheck: (godotPath: string, projectAbsPath: string) => Promise<GodotHeadlessCheckResult>
-  spawnEditor: (godotPath: string, projectAbsPath: string, sceneResPath?: string) => { pid?: number }
+  runHeadlessCheck: (
+    godotPath: string,
+    projectAbsPath: string,
+    timeoutMs?: number,
+    godotVersion?: string | null,
+    projectRootRelPath?: string
+  ) => Promise<GodotHeadlessCheckResult>
+  spawnEditor: (
+    godotPath: string,
+    projectAbsPath: string,
+    sceneResPath?: string
+  ) => Promise<{ pid?: number; error?: string }> | { pid?: number; error?: string }
   ensureExportDir: (projectAbsPath: string, exportPath: string) => Promise<string>
   platform: string
 }
@@ -170,9 +180,17 @@ async function readPinnedScenes(
   return []
 }
 
-async function readStoredSession(orca: OrcaWorkerApi): Promise<GodotActiveSession | null> {
+function sessionStorageKey(workspace: GodotWorkspaceInfo): string {
+  return STORAGE_SESSION_PREFIX + workspace.id
+}
+
+async function readStoredSession(
+  orca: OrcaWorkerApi,
+  workspace: GodotWorkspaceInfo | null
+): Promise<GodotActiveSession | null> {
+  if (!workspace) return null
   try {
-    const val = await orca.storage.get(STORAGE_LAST_SESSION)
+    const val = await orca.storage.get(sessionStorageKey(workspace))
     if (!val || typeof val !== 'object' || Array.isArray(val)) return null
     const rec = val as Record<string, unknown>
     if (typeof rec.terminalId !== 'string' || typeof rec.label !== 'string') return null
@@ -209,7 +227,7 @@ async function verifyActiveSession(
     if (orca.host.has('terminal.list')) {
       const res = await orca.host.call('terminal.list', { workspaceId: workspace.id })
       if (!res.terminals.some((t) => t.id === session.terminalId)) {
-        await orca.storage.delete(STORAGE_LAST_SESSION).catch(() => undefined)
+        await orca.storage.delete(sessionStorageKey(workspace)).catch(() => undefined)
         return null
       }
       return session
@@ -276,6 +294,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   let cachedBinary: { configuredPath: string; info: GodotBinaryInfo; at: number } | null = null
   let lastChecksByProject = new Map<string, GodotHeadlessCheckResult>()
   let lastSnapshot: GodotSnapshot | null = null
+  let inFlightSnapshot: Promise<GodotSnapshot> | null = null
 
   async function getBinary(settings: GodotSettings, forceRefresh = false): Promise<GodotBinaryInfo> {
     const now = Date.now()
@@ -294,7 +313,8 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   async function readSessionLogs(
     session: GodotActiveSession | null,
-    maxLines = 150
+    maxLines = 150,
+    projectRootRelPath = '.'
   ): Promise<GodotLogsResult> {
     if (!session) {
       return {
@@ -311,7 +331,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         terminalId: session.terminalId,
         maxLines: Math.min(Math.max(maxLines, 20), 500)
       })
-      const diagnostics = parseGodotOutput(res.lines)
+      const diagnostics = parseGodotOutput(res.lines, projectRootRelPath)
       return {
         lines: res.lines,
         diagnostics,
@@ -332,7 +352,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   }
 
-  async function buildSnapshot(options: {
+  async function buildSnapshotImpl(options: {
     forceRefresh?: boolean
     selectProjectRelPath?: string
   } = {}): Promise<GodotSnapshot> {
@@ -382,12 +402,12 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
 
-    const storedSession = await readStoredSession(orca)
+    const storedSession = await readStoredSession(orca, workspace)
     const activeSession = await verifyActiveSession(orca, workspace, storedSession)
     const pinnedScenes = await readPinnedScenes(orca, workspace, selectedProjectRelPath)
     const checkKey = workspace ? projectStorageKey(workspace, selectedProjectRelPath) : ''
     const lastCheck = checkKey ? lastChecksByProject.get(checkKey) ?? null : null
-    const logs = activeSession ? await readSessionLogs(activeSession, 120) : null
+    const logs = activeSession ? await readSessionLogs(activeSession, 120, selectedProjectRelPath) : null
 
     const snapshot: GodotSnapshot = {
       workspace,
@@ -408,6 +428,23 @@ export default function activate(orca: OrcaWorkerApi): void {
     lastSnapshot = snapshot
     await updateStatusBar(orca, snapshot)
     return snapshot
+  }
+
+  async function buildSnapshot(options: {
+    forceRefresh?: boolean
+    selectProjectRelPath?: string
+  } = {}): Promise<GodotSnapshot> {
+    if (!options.selectProjectRelPath && inFlightSnapshot) {
+      return inFlightSnapshot
+    }
+    const promise = buildSnapshotImpl(options)
+    if (!options.selectProjectRelPath) {
+      inFlightSnapshot = promise
+      promise.finally(() => {
+        if (inFlightSnapshot === promise) inFlightSnapshot = null
+      })
+    }
+    return promise
   }
 
   function resolveProjectAbsPath(snapshot: GodotSnapshot): string | null {
@@ -439,8 +476,11 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { snapshot, projectAbsPath, godotPath: snapshot.binary.path }
   }
 
-  async function saveActiveSession(session: GodotActiveSession): Promise<void> {
-    await orca.storage.set(STORAGE_LAST_SESSION, session).catch(() => undefined)
+  async function saveActiveSession(
+    workspace: GodotWorkspaceInfo,
+    session: GodotActiveSession
+  ): Promise<void> {
+    await orca.storage.set(sessionStorageKey(workspace), session).catch(() => undefined)
   }
 
   async function runGodot(input?: { sceneResPath?: string; headless?: boolean }): Promise<GodotActionResult> {
@@ -449,7 +489,9 @@ export default function activate(orca: OrcaWorkerApi): void {
 
     const { snapshot, projectAbsPath, godotPath } = ready
     const args: string[] = []
-    if (input?.headless) args.push('--headless')
+    if (input?.headless) {
+      args.push(isGodot3Version(snapshot.binary.shortVersion) ? '--no-window' : '--headless')
+    }
     args.push('--path', projectAbsPath)
     if (input?.sceneResPath) args.push(input.sceneResPath)
     const extra = splitCliArgs(snapshot.settings.extraRunArgs)
@@ -474,7 +516,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       startedAt: Date.now(),
       sceneResPath: input?.sceneResPath ?? snapshot.project!.mainSceneResPath
     }
-    await saveActiveSession(session)
+    await saveActiveSession(snapshot.workspace!, session)
 
     const updated = await buildSnapshot()
     orca.panels.post('godot.updated', updated)
@@ -494,10 +536,15 @@ export default function activate(orca: OrcaWorkerApi): void {
     const sceneLabel = input?.sceneResPath ? ` (${path.basename(input.sceneResPath)})` : ''
 
     if (snapshot.settings.openEditorDetached) {
-      const { pid } = activeDeps.spawnEditor(godotPath, projectAbsPath, input?.sceneResPath)
+      const spawned = await activeDeps.spawnEditor(godotPath, projectAbsPath, input?.sceneResPath)
+      if (spawned.error) {
+        const message = `Failed to launch Godot Editor: ${spawned.error}`
+        orca.panels.post('godot.status', { busy: false, message, tone: 'danger' })
+        return { ok: false, message }
+      }
       const message = `Launched Godot Editor${sceneLabel}`
       orca.panels.post('godot.status', { busy: false, message, tone: 'success' })
-      return { ok: true, pid, message }
+      return { ok: true, pid: spawned.pid, message }
     }
 
     const args = ['-e', '--path', projectAbsPath]
@@ -518,22 +565,23 @@ export default function activate(orca: OrcaWorkerApi): void {
       startedAt: Date.now(),
       sceneResPath: input?.sceneResPath ?? null
     }
-    await saveActiveSession(session)
+    await saveActiveSession(snapshot.workspace!, session)
     const updated = await buildSnapshot()
     orca.panels.post('godot.updated', updated)
     return { ok: true, terminalId: created.terminalId, message: `Opened ${title}` }
   }
 
   async function stopActiveRun(): Promise<GodotActionResult> {
-    const session = await readStoredSession(orca)
-    if (!session) {
+    const workspace = lastSnapshot?.workspace ?? (await resolveFocusedWorkspace(orca))
+    const session = await readStoredSession(orca, workspace)
+    if (!workspace || !session) {
       return { ok: false, message: 'No active Godot session to stop.' }
     }
 
     try {
       await orca.host.call('terminal.close', { terminalId: session.terminalId })
     } catch (err) {
-      await orca.storage.delete(STORAGE_LAST_SESSION).catch(() => undefined)
+      await orca.storage.delete(sessionStorageKey(workspace)).catch(() => undefined)
       const updated = await buildSnapshot()
       orca.panels.post('godot.updated', updated)
       return {
@@ -542,7 +590,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
 
-    await orca.storage.delete(STORAGE_LAST_SESSION).catch(() => undefined)
+    await orca.storage.delete(sessionStorageKey(workspace)).catch(() => undefined)
     const updated = await buildSnapshot()
     orca.panels.post('godot.updated', updated)
     orca.panels.post('godot.status', {
@@ -554,7 +602,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   }
 
   async function focusActiveTerminal(): Promise<GodotActionResult> {
-    const session = await readStoredSession(orca)
+    const workspace = lastSnapshot?.workspace ?? (await resolveFocusedWorkspace(orca))
+    const session = await readStoredSession(orca, workspace)
     if (!session) {
       return { ok: false, message: 'No active Godot terminal to focus.' }
     }
@@ -596,7 +645,13 @@ export default function activate(orca: OrcaWorkerApi): void {
       tone: 'accent'
     })
 
-    const result = await activeDeps.runHeadlessCheck(godotPath, projectAbsPath)
+    const result = await activeDeps.runHeadlessCheck(
+      godotPath,
+      projectAbsPath,
+      30000,
+      snapshot.binary.shortVersion,
+      snapshot.project!.rootRelPath
+    )
     const key = projectStorageKey(snapshot.workspace!, snapshot.project!.rootRelPath)
     lastChecksByProject.set(key, result)
 
@@ -645,10 +700,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
 
     const resolvedOut = await activeDeps.ensureExportDir(projectAbsPath, preset.exportPath)
-    const flag = input.mode === 'debug' ? '--export-debug' : '--export-release'
+    const isGodot3 = isGodot3Version(snapshot.binary.shortVersion)
+    const headlessFlag = isGodot3 ? '--no-window' : '--headless'
+    const flag =
+      input.mode === 'debug' ? '--export-debug' : isGodot3 ? '--export' : '--export-release'
     const command = buildShellCommand(
       godotPath,
-      ['--headless', '--path', projectAbsPath, flag, preset.name, resolvedOut],
+      [headlessFlag, '--path', projectAbsPath, flag, preset.name, resolvedOut],
       activeDeps.platform
     )
     const title = `Godot Export: ${preset.name} (${input.mode})`
@@ -666,7 +724,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       startedAt: Date.now(),
       sceneResPath: null
     }
-    await saveActiveSession(session)
+    await saveActiveSession(snapshot.workspace!, session)
 
     const updated = await buildSnapshot()
     orca.panels.post('godot.updated', updated)
@@ -701,10 +759,11 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
 
+    const headlessFlag = isGodot3Version(snapshot.binary.shortVersion) ? '--no-window' : '--headless'
     const args =
       runner === 'gut'
-        ? ['--headless', '--path', projectAbsPath, '-s', 'addons/gut/gut_cmdln.gd', '-gexit']
-        : ['--headless', '--path', projectAbsPath, '-s', 'addons/gdUnit4/bin/GdUnitCmdTool.gd', '-a', 'res://']
+        ? [headlessFlag, '--path', projectAbsPath, '-s', 'addons/gut/gut_cmdln.gd', '-gexit']
+        : [headlessFlag, '--path', projectAbsPath, '-s', 'addons/gdUnit4/bin/GdUnitCmdTool.gd', '-a', 'res://']
 
     const command = buildShellCommand(godotPath, args, activeDeps.platform)
     const title = `Godot Tests (${runner.toUpperCase()})`
@@ -722,7 +781,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       startedAt: Date.now(),
       sceneResPath: null
     }
-    await saveActiveSession(session)
+    await saveActiveSession(snapshot.workspace!, session)
 
     const updated = await buildSnapshot()
     orca.panels.post('godot.updated', updated)
@@ -739,19 +798,11 @@ export default function activate(orca: OrcaWorkerApi): void {
       return { ok: false, message: 'Invalid relative file path.' }
     }
 
-    // If a diagnostic passed a project-relative path inside a sub-folder project, normalize it
-    const finalRel =
-      snapshot.project &&
-      snapshot.project.rootRelPath !== '.' &&
-      !cleanRel.startsWith(`${snapshot.project.rootRelPath}/`)
-        ? joinRelPath(snapshot.project.rootRelPath, cleanRel)
-        : cleanRel
-
     await orca.host.call('editor.open', {
       workspaceId: snapshot.workspace.id,
-      path: finalRel
+      path: cleanRel
     })
-    return { ok: true, message: `Opened ${finalRel}` }
+    return { ok: true, message: `Opened ${cleanRel}` }
   }
 
   // --- Panel Request Handlers ---
@@ -769,8 +820,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('godot.focusTerminal', async () => focusActiveTerminal())
 
   orca.panels.handle('godot.readLogs', async (input) => {
-    const session = await readStoredSession(orca)
-    return readSessionLogs(session, input?.maxLines ?? 150)
+    const workspace = lastSnapshot?.workspace ?? (await resolveFocusedWorkspace(orca))
+    const session = await readStoredSession(orca, workspace)
+    const rootRel = lastSnapshot?.project?.rootRelPath ?? '.'
+    return readSessionLogs(session, input?.maxLines ?? 150, rootRel)
   })
 
   orca.panels.handle('godot.checkHeadless', async () => runCheckHeadless())

@@ -7,9 +7,9 @@ Sidebar panel and trusted-worker integration for **Godot Engine** (3.x / 4.x) in
 ## Features
 
 - **Project Overview**: Auto-detects `project.godot` (including monorepos with multiple Godot projects), parses engine features, renderer, viewport size, physics tick rate, autoload singletons, addons, and probes Godot Editor LSP port (`6005` by default).
-- **One-Click Execution**:
-  - **Run (F5)** main scene or **Run Scene (F6)** on any `.tscn` inside a managed Orca terminal.
-  - **Open in Godot Editor** (detached process or managed Orca terminal) for the project or any specific scene.
+- **One-Click Execution & Shortcuts**:
+  - **Run (`Ctrl+F5` / `Cmd+F5`)** main scene or **Run Scene** on any `.tscn` inside a managed Orca terminal.
+  - **Stop (`Ctrl+F8` / `Cmd+F8`)** active run, **Headless Check (`Ctrl+Shift+F5` / `Cmd+Shift+F5`)**, and **Open in Godot Editor (`Ctrl+Alt+G` / `Cmd+Alt+G`)**.
   - **Active Session Bar** with elapsed time, Focus Terminal, and Stop controls.
 - **Scene Explorer (List & Tree views)**: Search scenes by name, `res://` path, root node type (`CharacterBody3D`, `Node3D`, `Control`, ...), or attached script; star/pin favorite scenes per project for instant launch.
 - **Scripts, Shaders & Resources**: Sortable and filterable table of `.gd`, `.cs`, `.gdshader`, and `.tres` files showing `class_name`, `extends`, and `@tool` metadata — click or press Enter to open directly in an Orca editor tab.

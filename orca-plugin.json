@@ -58,6 +58,28 @@
         "when": "workspace"
       }
     ],
+    "keybindings": [
+      {
+        "command": "godot.runProject",
+        "key": "Mod+F5",
+        "when": "workspace"
+      },
+      {
+        "command": "godot.stopRun",
+        "key": "Mod+F8",
+        "when": "workspace"
+      },
+      {
+        "command": "godot.checkHeadless",
+        "key": "Mod+Shift+F5",
+        "when": "workspace"
+      },
+      {
+        "command": "godot.openEditor",
+        "key": "Mod+Alt+G",
+        "when": "workspace"
+      }
+    ],
     "events": [
       {
         "on": "workspace.changed"

@@ -8,6 +8,7 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  isGodot3Version,
   joinRelPath,
   parseAddonCfg,
   parseExportPresets,
@@ -48,7 +49,7 @@ const IGNORED_DIRS = new Set([
 
 const MAX_SCAN_FILES = 2500
 const MAX_SCAN_DEPTH = 8
-const HEADER_READ_BYTES = 16 * 1024
+const HEADER_READ_BYTES = 64 * 1024
 
 function toPosixPath(p: string): string {
   return p.split(path.sep).join('/')
@@ -148,6 +149,7 @@ function getKnownGodotPaths(): string[] {
     const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
     return [
       path.join(programFiles, 'Godot', 'Godot.exe'),
+      path.join(programFilesX86, 'Steam', 'steamapps', 'common', 'Godot Engine', 'godot.windows.editor.x86_64.exe'),
       path.join(programFilesX86, 'Steam', 'steamapps', 'common', 'Godot Engine', 'godot.windows.opt.tools.64.exe'),
       localAppData ? path.join(localAppData, 'Programs', 'Godot', 'Godot.exe') : ''
     ].filter(Boolean)
@@ -155,6 +157,9 @@ function getKnownGodotPaths(): string[] {
   return [
     path.join(home, '.local/bin/godot'),
     path.join(home, '.local/bin/godot4'),
+    path.join(home, '.local/share/flatpak/exports/bin/org.godotengine.Godot'),
+    '/var/lib/flatpak/exports/bin/org.godotengine.Godot',
+    path.join(home, '.local/share/Steam/steamapps/common/Godot Engine/godot.linuxbsd.editor.x86_64'),
     path.join(home, '.local/share/Steam/steamapps/common/Godot Engine/godot.x11.opt.tools.64'),
     '/usr/local/bin/godot',
     '/usr/bin/godot',
@@ -444,6 +449,8 @@ export async function scanGodotProject(
           const head = await readFileHead(abs, HEADER_READ_BYTES)
           const meta = parseSceneHeader(head)
           const scriptProjRel = meta.scriptResPath ? resPathToRelPath(meta.scriptResPath) : null
+          const matchedMain =
+            isMain || Boolean(meta.uid && parsedProject.mainSceneResPath === meta.uid)
           return {
             name: path.basename(projRel),
             resPath,
@@ -453,7 +460,7 @@ export async function scanGodotProject(
             scriptResPath: meta.scriptResPath,
             scriptRelPath: scriptProjRel ? joinRelPath(normalizedRel, scriptProjRel) : null,
             nodeCount: meta.nodeCount,
-            isMain
+            isMain: matchedMain
           }
         } catch {
           return {
@@ -549,13 +556,17 @@ export async function scanGodotProject(
   const shaderCount = codeFiles.filter((f) => f.kind === 'shader').length
   const resourceCount = codeFiles.filter((f) => f.kind === 'resource').length
 
+  const resolvedMainScene = scenes.find((s) => s.isMain) ?? null
+  const finalMainSceneResPath = resolvedMainScene?.resPath ?? parsedProject.mainSceneResPath
+  const finalMainSceneRelPath = resolvedMainScene?.relPath ?? mainSceneRelPath
+
   return {
     name: parsedProject.name,
     description: parsedProject.description,
     rootRelPath: normalizedRel,
     projectFileRelPath: joinRelPath(normalizedRel, 'project.godot'),
-    mainSceneResPath: parsedProject.mainSceneResPath,
-    mainSceneRelPath,
+    mainSceneResPath: finalMainSceneResPath,
+    mainSceneRelPath: finalMainSceneRelPath,
     features: parsedProject.features,
     godotVersionHint: parsedProject.godotVersionHint,
     renderer: parsedProject.renderer,
@@ -584,22 +595,25 @@ export async function scanGodotProject(
   }
 }
 
-/** Runs `godot --headless --path <projectRoot> --quit` and parses structured diagnostics. */
+/** Runs `godot --headless --path <projectRoot> --quit` (or `--no-window` on Godot 3) and parses structured diagnostics. */
 export async function runHeadlessProjectCheck(
   godotPath: string,
   projectAbsPath: string,
-  timeoutMs = 30000
+  timeoutMs = 30000,
+  godotVersion: string | null = null,
+  projectRootRelPath = '.'
 ): Promise<GodotHeadlessCheckResult> {
   const startedAt = Date.now()
+  const headlessFlag = isGodot3Version(godotVersion) ? '--no-window' : '--headless'
   const res = await execFileText(
     godotPath,
-    ['--headless', '--path', projectAbsPath, '--quit'],
+    [headlessFlag, '--path', projectAbsPath, '--quit'],
     { cwd: projectAbsPath, timeoutMs }
   )
   const durationMs = Date.now() - startedAt
   const combined = [res.stdout, res.stderr].filter((s) => s.trim().length > 0).join('\n')
   const lines = combined.split(/\r?\n/)
-  const diagnostics = parseGodotOutput(lines)
+  const diagnostics = parseGodotOutput(lines, projectRootRelPath)
   const errorCount = diagnostics.filter((d) => d.severity === 'error').length
   const warningCount = diagnostics.filter((d) => d.severity === 'warning').length
   const ok = res.ok && errorCount === 0
@@ -621,17 +635,36 @@ export function spawnGodotEditorDetached(
   godotPath: string,
   projectAbsPath: string,
   sceneResPath?: string
-): { pid?: number } {
+): Promise<{ pid?: number; error?: string }> {
   const args = ['-e', '--path', projectAbsPath]
   if (sceneResPath) args.push(sceneResPath)
-  const child = spawn(godotPath, args, {
-    cwd: projectAbsPath,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: false
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: { pid?: number; error?: string }) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    try {
+      const child = spawn(godotPath, args, {
+        cwd: projectAbsPath,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false
+      })
+      child.on('error', (err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        finish({ error: message })
+      })
+      child.on('spawn', () => {
+        child.unref()
+        finish({ pid: child.pid })
+      })
+    } catch (err) {
+      finish({ error: err instanceof Error ? err.message : String(err) })
+    }
   })
-  child.unref()
-  return { pid: child.pid }
 }
 
 /** Ensures the parent output directory for an export path exists before invoking Godot export. */

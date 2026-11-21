@@ -299,4 +299,103 @@ describe('godot-companion worker', () => {
     assert.deepEqual(worker.refusals, [])
     await worker.deactivate()
   })
+
+  test('isolates active sessions per workspace, matches uid:// main scenes, supports Godot 3 flags, and handles spawn errors', async () => {
+    const wsPath = await createFixtureGodotWorkspace()
+
+    // Update project.godot to use Godot 4.4+ uid:// main scene reference
+    await fs.writeFile(
+      path.join(wsPath, 'project.godot'),
+      `config_version=5
+
+[application]
+config/name="UID Game"
+run/main_scene="uid://mainscene123"
+config/features=PackedStringArray("4.4", "Forward Plus")
+`,
+      'utf8'
+    )
+    await fs.writeFile(
+      path.join(wsPath, 'scenes', 'main.tscn'),
+      `[gd_scene load_steps=2 format=3 uid="uid://mainscene123"]
+[node name="Main" type="Node3D"]
+`,
+      'utf8'
+    )
+
+    let activeWorkspaceId = 'ws-a'
+
+    setWorkerDepsForTesting({
+      detectBinary: async () => ({
+        found: true,
+        path: '/usr/local/bin/godot3',
+        version: '3.5.3.stable.official',
+        shortVersion: '3.5.3',
+        source: 'path',
+        error: null
+      }),
+      probeLspPort: async () => false,
+      spawnEditor: async () => ({ error: 'ENOENT: godot3 not found' }),
+      platform: 'linux'
+    })
+
+    const host = mockHost({
+      results: {
+        'workspace.readContext': () => ({
+          workspaceId: activeWorkspaceId,
+          branch: 'main',
+          displayName: activeWorkspaceId,
+          terminals: activeWorkspaceId === 'ws-a' ? [{ id: 'term-a', title: 'Godot: UID Game' }] : []
+        }),
+        'workspace.list': {
+          workspaces: [
+            { id: 'ws-a', kind: 'worktree', name: 'ws-a', path: wsPath, branch: 'main', hostId: 'local' },
+            { id: 'ws-b', kind: 'worktree', name: 'ws-b', path: wsPath, branch: 'main', hostId: 'local' }
+          ],
+          truncated: false
+        },
+        'terminal.list': (params: { workspaceId?: string }) => ({
+          terminals: params.workspaceId === 'ws-a' ? [{ id: 'term-a', title: 'Godot: UID Game' }] : [],
+          truncated: false
+        }),
+        'terminal.create': { terminalId: 'term-a' },
+        'terminal.read': { lines: [], truncated: false },
+        'statusBar.update': { ok: true }
+      }
+    })
+
+    const worker = await mountWorker(main, { host })
+
+    // 1. uid:// main scene resolves to res://scenes/main.tscn and marks isMain
+    const snapA = await worker.request('godot.snapshot', {})
+    assert.equal(snapA.project?.mainSceneResPath, 'res://scenes/main.tscn')
+    assert.equal(snapA.project?.mainSceneRelPath, 'scenes/main.tscn')
+    assert.equal(snapA.project?.scenes[0]?.isMain, true)
+
+    // 2. Spawn error returns ok: false without throwing
+    const edErr = await worker.request('godot.openEditor', {})
+    assert.equal(edErr.ok, false)
+    assert.match(edErr.message, /ENOENT/)
+
+    // 3. Godot 3.x export uses --no-window and --export
+    const expRes = await worker.request('godot.exportPreset', {
+      presetName: 'Linux/X11',
+      mode: 'release'
+    })
+    assert.equal(expRes.ok, true)
+    const createCalls = host.callsOf('terminal.create') as { command?: string }[]
+    assert.match(String(createCalls[0].command), /--no-window --path .* --export Linux\/X11/)
+
+    // 4. Switching to ws-b does NOT erase ws-a's active session
+    activeWorkspaceId = 'ws-b'
+    const snapB = await worker.request('godot.snapshot', { forceRefresh: true })
+    assert.equal(snapB.activeSession, null)
+
+    activeWorkspaceId = 'ws-a'
+    const snapAReturn = await worker.request('godot.snapshot', { forceRefresh: true })
+    assert.equal(snapAReturn.activeSession?.terminalId, 'term-a')
+
+    assert.deepEqual(worker.refusals, [])
+    await worker.deactivate()
+  })
 })

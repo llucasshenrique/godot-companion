@@ -1,6 +1,7 @@
 import { assert, describe, test } from 'orca/testing'
 import {
   buildShellCommand,
+  isGodot3Version,
   parseAddonCfg,
   parseExportPresets,
   parseGodotOutput,
@@ -147,6 +148,7 @@ script = ExtResource("1_script")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 `
     const meta = parseSceneHeader(tscn)
+    assert.equal(meta.uid, 'uid://abc123')
     assert.equal(meta.rootName, 'Player')
     assert.equal(meta.rootType, 'CharacterBody3D')
     assert.equal(meta.scriptResPath, 'res://scripts/player.gd')
@@ -204,10 +206,15 @@ script = ExtResource("1_script")
     assert.equal(diags[2].line, 7)
   })
 
-  test('rejects path traversal in resPathToRelPath and safely quotes CLI commands', () => {
+  test('rejects path traversal and non-res schemes, and safely quotes CLI commands', () => {
     assert.equal(resPathToRelPath('res://scenes/main.tscn'), 'scenes/main.tscn')
     assert.equal(resPathToRelPath('res://../etc/passwd'), null)
+    assert.equal(resPathToRelPath('uid://abc123def'), null)
+    assert.equal(resPathToRelPath('user://save.dat'), null)
     assert.equal(parseGodotShortVersion('4.7.2.stable.official.ed1daf0bf'), '4.7.2')
+    assert.equal(isGodot3Version('3.5.3'), true)
+    assert.equal(isGodot3Version('4.4.0'), false)
+    assert.equal(isGodot3Version(null), false)
 
     assert.deepEqual(splitCliArgs('--verbose --resolution "1280x720"'), [
       '--verbose',
@@ -224,5 +231,35 @@ script = ExtResource("1_script")
       cmd,
       `'/home/user/Steam/Godot Engine/godot' --path '/tmp/my game' --export-release Linux/X11 /tmp/out/game.x86_64`
     )
+  })
+
+  test('strips ANSI codes in Godot output and prefixes sub-project diagnostic paths', () => {
+    const ansiLines = [
+      '\x1b[1;31mERROR:\x1b[0m \x1b[33mres://scripts/player.gd:42\x1b[0m - Parse Error: Bad syntax',
+      '\x1b[1;33mWARNING:\x1b[0m Unused variable "foo".',
+      '     at: GDScript::reload (\x1b[36mres://scripts/hud.gd:9\x1b[0m)'
+    ]
+    const diags = parseGodotOutput(ansiLines, 'client')
+    assert.equal(diags.length, 2)
+    assert.equal(diags[0].severity, 'error')
+    assert.equal(diags[0].relPath, 'client/scripts/player.gd')
+    assert.equal(diags[0].line, 42)
+    assert.equal(diags[1].severity, 'warning')
+    assert.equal(diags[1].relPath, 'client/scripts/hud.gd')
+    assert.equal(diags[1].line, 9)
+  })
+
+  test('handles multi-line PackedStringArray and escaped backslashes before quotes', () => {
+    const sample = `
+[application]
+config/name="Path\\\\"
+config/features=PackedStringArray(
+  "4.4",
+  "Forward Plus"
+)
+`
+    const parsed = parseProjectGodot(sample)
+    assert.equal(parsed.name, 'Path\\')
+    assert.deepEqual(parsed.features, ['4.4', 'Forward Plus'])
   })
 })

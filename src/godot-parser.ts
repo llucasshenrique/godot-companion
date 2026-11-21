@@ -27,6 +27,7 @@ export type ParsedProjectGodot = {
 }
 
 export type ParsedSceneHeader = {
+  uid: string | null
   rootName: string | null
   rootType: string | null
   scriptResPath: string | null
@@ -53,6 +54,9 @@ export type ParsedAddonCfg = {
 export function resPathToRelPath(resPath: string): string | null {
   const trimmed = resPath.trim().replace(/^"|"$/g, '')
   if (!trimmed) return null
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) && !trimmed.startsWith('res://')) {
+    return null
+  }
   const withoutScheme = trimmed.startsWith('res://') ? trimmed.slice('res://'.length) : trimmed
   const normalized = withoutScheme.replace(/\\/g, '/').replace(/^\/+/, '')
   const parts = normalized.split('/').filter((segment) => segment.length > 0 && segment !== '.')
@@ -81,9 +85,7 @@ function unquote(value: string): string {
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
     return trimmed
       .slice(1, -1)
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\')
-      .replace(/\\n/g, '\n')
+      .replace(/\\([\\n"])/g, (_, ch: string) => (ch === 'n' ? '\n' : ch))
   }
   return trimmed
 }
@@ -96,7 +98,7 @@ function parseStringArray(raw: string): string[] {
   const re = /"((?:\\.|[^"\\])*)"/g
   let m: RegExpExecArray | null
   while ((m = re.exec(body)) !== null) {
-    out.push(m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
+    out.push(m[1].replace(/\\([\\"])/g, '$1'))
   }
   return out
 }
@@ -144,8 +146,8 @@ export function parseConfigSections(text: string): Map<string, Map<string, strin
         continue
       }
       if (!inString) {
-        if (ch === '{' || ch === '[') delta++
-        else if (ch === '}' || ch === ']') delta--
+        if (ch === '{' || ch === '[' || ch === '(') delta++
+        else if (ch === '}' || ch === ']' || ch === ')') delta--
       }
     }
     return delta
@@ -390,8 +392,11 @@ export function parseExportPresets(text: string): GodotExportPreset[] {
   return presets
 }
 
-/** Parses root node type, attached script, and node count from a `.tscn` file. */
+/** Parses root node type, attached script, UID, and node count from a `.tscn` file. */
 export function parseSceneHeader(text: string): ParsedSceneHeader {
+  const headerMatch = text.match(/\[gd_scene\s+([^\]]+)\]/)
+  const uid = headerMatch?.[1].match(/\buid="([^"]+)"/)?.[1] ?? null
+
   const extScripts = new Map<string, string>()
   const extRe = /\[ext_resource\s+([^\]]+)\]/g
   let m: RegExpExecArray | null
@@ -435,7 +440,7 @@ export function parseSceneHeader(text: string): ParsedSceneHeader {
     }
   }
 
-  return { rootName, rootType, scriptResPath, nodeCount }
+  return { uid, rootName, rootType, scriptResPath, nodeCount }
 }
 
 /** Parses `class_name`, `extends`, and `@tool` from a GDScript or C# script. */
@@ -482,8 +487,16 @@ export function parseAddonCfg(text: string): ParsedAddonCfg {
   }
 }
 
+/** Strips ANSI CSI escape sequences (colors/formatting) from PTY output lines. */
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+}
+
 /** Parses Godot CLI / runtime stdout+stderr lines into structured clickable diagnostics. */
-export function parseGodotOutput(lines: readonly string[]): GodotDiagnostic[] {
+export function parseGodotOutput(
+  lines: readonly string[],
+  projectRootRelPath = '.'
+): GodotDiagnostic[] {
   const diagnostics: GodotDiagnostic[] = []
   const seen = new Set<string>()
   const resLocRe = /(res:\/\/[^\s:)"']+):(\d+)/
@@ -496,7 +509,7 @@ export function parseGodotOutput(lines: readonly string[]): GodotDiagnostic[] {
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i].trim()
+    const raw = stripAnsi(lines[i]).trim()
     if (!raw) continue
 
     const isError =
@@ -523,7 +536,7 @@ export function parseGodotOutput(lines: readonly string[]): GodotDiagnostic[] {
       line = Number.parseInt(inlineLoc[2], 10)
     } else if (i + 1 < lines.length) {
       // Godot often prints the location on the immediately following `at: ... (res://foo.gd:42)` line
-      const nextLine = lines[i + 1].trim()
+      const nextLine = stripAnsi(lines[i + 1]).trim()
       const nextLoc = nextLine.match(resLocRe)
       if (nextLoc) {
         resPath = nextLoc[1]
@@ -532,11 +545,12 @@ export function parseGodotOutput(lines: readonly string[]): GodotDiagnostic[] {
     }
 
     if (!message) message = raw
+    const projRel = resPath ? resPathToRelPath(resPath) : null
     pushUnique({
       severity,
       message,
       resPath,
-      relPath: resPath ? resPathToRelPath(resPath) : null,
+      relPath: projRel ? joinRelPath(projectRootRelPath, projRel) : null,
       line: line !== null && Number.isFinite(line) ? line : null,
       raw
     })
@@ -552,6 +566,11 @@ export function parseGodotShortVersion(versionOutput: string): string | null {
   const firstLine = versionOutput.trim().split(/\r?\n/)[0] ?? ''
   const match = firstLine.match(/^(\d+\.\d+(?:\.\d+)?)/)
   return match ? match[1] : null
+}
+
+/** Returns true when a detected short version string belongs to Godot 3.x. */
+export function isGodot3Version(shortVersion: string | null | undefined): boolean {
+  return Boolean(shortVersion && /^3\./.test(shortVersion.trim()))
 }
 
 /** Splits a user CLI argument string into tokens while respecting single/double quotes. */
