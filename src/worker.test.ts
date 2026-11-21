@@ -398,4 +398,73 @@ config/features=PackedStringArray("4.4", "Forward Plus")
     assert.deepEqual(worker.refusals, [])
     await worker.deactivate()
   })
+
+  test('ends the session when Godot exits but its terminal stays open', async () => {
+    const wsPath = await createFixtureGodotWorkspace()
+    let godotExited = false
+
+    setWorkerDepsForTesting({
+      detectBinary: async () => ({
+        found: true,
+        path: '/usr/local/bin/godot',
+        version: '4.7.2.stable.official',
+        shortVersion: '4.7.2',
+        source: 'path',
+        error: null
+      }),
+      probeLspPort: async () => false,
+      platform: 'linux'
+    })
+
+    const host = mockHost({
+      results: {
+        'workspace.readContext': {
+          workspaceId: 'ws-1',
+          branch: 'main',
+          displayName: 'starforge',
+          terminals: [{ id: 'term-1', title: 'Godot: Starforge Prototype' }]
+        },
+        'workspace.list': {
+          workspaces: [
+            { id: 'ws-1', kind: 'worktree', name: 'starforge', path: wsPath, branch: 'main', hostId: 'local' }
+          ],
+          truncated: false
+        },
+        'terminal.list': {
+          terminals: [{ id: 'term-1', title: 'Godot: Starforge Prototype' }],
+          truncated: false
+        },
+        'terminal.create': { terminalId: 'term-1' },
+        'terminal.read': () => ({
+          lines: godotExited
+            ? ['Godot Engine v4.7.2', 'GODOT_COMPANION_EXITED', '$ ']
+            : ['Godot Engine v4.7.2'],
+          truncated: false
+        }),
+        'statusBar.update': { ok: true }
+      }
+    })
+
+    const worker = await mountWorker(main, { host })
+
+    await worker.request('godot.run', {})
+    const createCalls = host.callsOf('terminal.create') as { command?: string }[]
+    assert.match(String(createCalls[0].command), /; echo GODOT_COMPANION_EXITED$/)
+
+    const running = await worker.request('godot.snapshot', {})
+    assert.equal(running.activeSession?.terminalId, 'term-1')
+
+    godotExited = true
+    const ended = await worker.request('godot.snapshot', {})
+    assert.equal(ended.activeSession, null)
+    assert.equal(ended.logs?.active, false)
+    assert.deepEqual(ended.logs?.lines, ['Godot Engine v4.7.2', '$ '])
+
+    const logs = await worker.request('godot.readLogs', {})
+    assert.equal(logs.active, false)
+    assert.equal(logs.lines[0], 'Godot Engine v4.7.2')
+
+    assert.deepEqual(worker.refusals, [])
+    await worker.deactivate()
+  })
 })

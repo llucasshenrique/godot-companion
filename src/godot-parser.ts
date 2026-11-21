@@ -631,3 +631,26 @@ export function buildShellCommand(
 ): string {
   return [executable, ...args].map((part) => quoteShellArg(part, platform)).join(' ')
 }
+
+/**
+ * Printed by the terminal shell after the Godot process exits, so the worker can tell a finished
+ * session from a live one (closing the game window ends Godot but leaves the shell open).
+ * A single bare word keeps it valid in bash, zsh, fish and PowerShell.
+ */
+export const SESSION_EXIT_MARKER = 'GODOT_COMPANION_EXITED'
+
+/** Appends the exit marker echo to a terminal command. cmd.exe/PowerShell differ, so Windows is left as is. */
+export function withExitMarker(command: string, platform = 'linux'): string {
+  if (platform === 'win32') return command
+  return `${command}; echo ${SESSION_EXIT_MARKER}`
+}
+
+/** True when a line printed by the shell (not the echoed command line) is the exit marker. */
+export function hasExitMarker(lines: readonly string[]): boolean {
+  return lines.some((line) => line.trim() === SESSION_EXIT_MARKER)
+}
+
+/** Drops the exit marker output line from terminal output shown to the user. */
+export function stripExitMarker(lines: readonly string[]): string[] {
+  return lines.filter((line) => line.trim() !== SESSION_EXIT_MARKER)
+}

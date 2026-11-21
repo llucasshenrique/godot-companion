@@ -5,9 +5,12 @@ import * as path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import {
   buildShellCommand,
+  hasExitMarker,
   isGodot3Version,
   parseGodotOutput,
-  splitCliArgs
+  splitCliArgs,
+  stripExitMarker,
+  withExitMarker
 } from './godot-parser.ts'
 import {
   detectGodotBinary,
@@ -34,6 +37,7 @@ import type {
 const STORAGE_PINNED_PREFIX = 'pinnedScenes:'
 const STORAGE_SELECTED_PROJECT_PREFIX = 'selectedProject:'
 const STORAGE_SESSION_PREFIX = 'activeSession:'
+const SESSION_WATCH_INTERVAL_MS = 2000
 
 const DEFAULT_SETTINGS: GodotSettings = {
   godotBinary: '',
@@ -295,6 +299,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   let lastChecksByProject = new Map<string, GodotHeadlessCheckResult>()
   let lastSnapshot: GodotSnapshot | null = null
   let inFlightSnapshot: Promise<GodotSnapshot> | null = null
+  /** Output of the last session that exited, per workspace id, so Logs keeps showing it. */
+  const endedLogsByWorkspace = new Map<string, GodotLogsResult>()
+  let sessionWatchTimer: ReturnType<typeof setTimeout> | null = null
 
   async function getBinary(settings: GodotSettings, forceRefresh = false): Promise<GodotBinaryInfo> {
     const now = Date.now()
@@ -331,12 +338,14 @@ export default function activate(orca: OrcaWorkerApi): void {
         terminalId: session.terminalId,
         maxLines: Math.min(Math.max(maxLines, 20), 500)
       })
-      const diagnostics = parseGodotOutput(res.lines, projectRootRelPath)
+      const exited = hasExitMarker(res.lines)
+      const lines = stripExitMarker(res.lines)
+      const diagnostics = parseGodotOutput(lines, projectRootRelPath)
       return {
-        lines: res.lines,
+        lines,
         diagnostics,
         truncated: res.truncated,
-        active: true,
+        active: !exited,
         terminalId: session.terminalId,
         label: session.label
       }
@@ -403,11 +412,20 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
 
     const storedSession = await readStoredSession(orca, workspace)
-    const activeSession = await verifyActiveSession(orca, workspace, storedSession)
+    let activeSession = await verifyActiveSession(orca, workspace, storedSession)
     const pinnedScenes = await readPinnedScenes(orca, workspace, selectedProjectRelPath)
     const checkKey = workspace ? projectStorageKey(workspace, selectedProjectRelPath) : ''
     const lastCheck = checkKey ? lastChecksByProject.get(checkKey) ?? null : null
-    const logs = activeSession ? await readSessionLogs(activeSession, 120, selectedProjectRelPath) : null
+    let logs = activeSession ? await readSessionLogs(activeSession, 120, selectedProjectRelPath) : null
+    if (workspace && activeSession && logs && !logs.active && logs.terminalId) {
+      // Godot exited (e.g. the game window was closed) while its terminal stays open.
+      endedLogsByWorkspace.set(workspace.id, logs)
+      await orca.storage.delete(sessionStorageKey(workspace)).catch(() => undefined)
+      activeSession = null
+    }
+    if (!activeSession) {
+      logs = workspace ? endedLogsByWorkspace.get(workspace.id) ?? null : null
+    }
 
     const snapshot: GodotSnapshot = {
       workspace,
@@ -427,6 +445,7 @@ export default function activate(orca: OrcaWorkerApi): void {
 
     lastSnapshot = snapshot
     await updateStatusBar(orca, snapshot)
+    if (activeSession) scheduleSessionWatch()
     return snapshot
   }
 
@@ -480,7 +499,47 @@ export default function activate(orca: OrcaWorkerApi): void {
     workspace: GodotWorkspaceInfo,
     session: GodotActiveSession
   ): Promise<void> {
+    endedLogsByWorkspace.delete(workspace.id)
     await orca.storage.set(sessionStorageKey(workspace), session).catch(() => undefined)
+  }
+
+  /** Polls the active session's terminal until Godot exits or the terminal goes away. */
+  function scheduleSessionWatch(): void {
+    if (sessionWatchTimer) return
+    sessionWatchTimer = setTimeout(() => {
+      sessionWatchTimer = null
+      void watchSessionTick()
+    }, SESSION_WATCH_INTERVAL_MS)
+    ;(sessionWatchTimer as unknown as { unref?: () => void }).unref?.()
+  }
+
+  async function watchSessionTick(): Promise<void> {
+    const session = lastSnapshot?.activeSession
+    if (!session) return
+    let ended = false
+    try {
+      const res = await orca.host.call('terminal.read', { terminalId: session.terminalId, maxLines: 40 })
+      ended = hasExitMarker(res.lines)
+    } catch {
+      ended = true
+    }
+    if (!ended) {
+      scheduleSessionWatch()
+      return
+    }
+    try {
+      const updated = await buildSnapshot()
+      orca.panels.post('godot.updated', updated)
+      if (!updated.activeSession) {
+        orca.panels.post('godot.status', {
+          busy: false,
+          message: `${session.label} exited`,
+          tone: 'neutral'
+        })
+      }
+    } catch (err) {
+      orca.log(`session watch refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   async function runGodot(input?: { sceneResPath?: string; headless?: boolean }): Promise<GodotActionResult> {
@@ -506,7 +565,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const created = await orca.host.call('terminal.create', {
       workspaceId: snapshot.workspace!.id,
       title,
-      command
+      command: withExitMarker(command, activeDeps.platform)
     })
 
     const session: GodotActiveSession = {
@@ -555,7 +614,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const created = await orca.host.call('terminal.create', {
       workspaceId: snapshot.workspace!.id,
       title,
-      command
+      command: withExitMarker(command, activeDeps.platform)
     })
 
     const session: GodotActiveSession = {
@@ -714,7 +773,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const created = await orca.host.call('terminal.create', {
       workspaceId: snapshot.workspace!.id,
       title,
-      command
+      command: withExitMarker(command, activeDeps.platform)
     })
 
     const session: GodotActiveSession = {
@@ -771,7 +830,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const created = await orca.host.call('terminal.create', {
       workspaceId: snapshot.workspace!.id,
       title,
-      command
+      command: withExitMarker(command, activeDeps.platform)
     })
 
     const session: GodotActiveSession = {
@@ -823,6 +882,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     const workspace = lastSnapshot?.workspace ?? (await resolveFocusedWorkspace(orca))
     const session = await readStoredSession(orca, workspace)
     const rootRel = lastSnapshot?.project?.rootRelPath ?? '.'
+    if (!session && workspace) {
+      const ended = endedLogsByWorkspace.get(workspace.id)
+      if (ended) return ended
+    }
     return readSessionLogs(session, input?.maxLines ?? 150, rootRel)
   })
 
