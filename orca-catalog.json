@@ -1,0 +1,102 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
+  "catalogVersion": 2,
+  "name": "Godot Companion",
+  "owner": "llucasshenrique",
+  "plugins": [
+    {
+      "id": "llucasshenrique.godot-companion",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/llucasshenrique/godot-companion.git",
+        "ref": "main"
+      },
+      "description": "Sidebar panel and workspace integration for Godot Engine projects.",
+      "categories": [
+        "languages"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "32ead34a8139d31df5be5bb4bf31a35ff59dbd88",
+          "contentHash": "84c6814bf1cf02deef74abc40738ac992b9ce795ef872711ddef1e2ff7a3454a",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.259",
+          "name": "Godot Companion",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Godot"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Main Scene"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Open in Editor"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Headless Validation"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Stop Active Run"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Refresh Project"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F5",
+              "detail": "godot.runProject"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F8",
+              "detail": "godot.stopRun"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Shift+F5",
+              "detail": "godot.checkHeadless"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Alt+G",
+              "detail": "godot.openEditor"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "Godot"
+            }
+          ],
+          "capabilities": [
+            "workspace:read",
+            "workspace:write",
+            "terminal:send",
+            "terminal:read",
+            "storage:own",
+            "settings:own",
+            "notifications:show"
+          ],
+          "images": {
+            "icon": {
+              "path": "images/icon.png",
+              "alt": "Godot Engine logo",
+              "sha256": "087af4c72b692790fd6836b89487f50927381705dd4a9aeb732dfb1674b0f928",
+              "width": 256,
+              "height": 256
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
