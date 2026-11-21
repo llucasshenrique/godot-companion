@@ -3,7 +3,7 @@
   "id": "godot-companion",
   "publisher": "llucasshenrique",
   "name": "Godot Companion",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sidebar panel and workspace integration for Godot Engine projects: inspect scenes, scripts, autoloads, input maps and export presets, launch the editor or scenes, run headless checks, and track diagnostics.",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "panels": [
       {
         "id": "godot",
-        "title": "Godot",
+        "title": "Godot Companion",
         "icon": "bot",
         "entry": "src/panel.tsx",
         "ui": "components"
