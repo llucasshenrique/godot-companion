@@ -17,6 +17,86 @@
       ],
       "releases": [
         {
+          "version": "0.1.2",
+          "commit": "33ed1c67a5aa6f6e10037534bba177c6b03c8bdc",
+          "contentHash": "39b1ec54a539ae10dc1f33de323d8310493d788fcee604f3753fb199364db1cd",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.259",
+          "name": "Godot Companion",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Godot Companion"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Main Scene"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Open in Editor"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Run Headless Validation"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Stop Active Run"
+            },
+            {
+              "kind": "commands",
+              "name": "Godot: Refresh Project"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F5",
+              "detail": "godot.runProject"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+F8",
+              "detail": "godot.stopRun"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Shift+F5",
+              "detail": "godot.checkHeadless"
+            },
+            {
+              "kind": "keybindings",
+              "name": "Mod+Alt+G",
+              "detail": "godot.openEditor"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "Godot"
+            }
+          ],
+          "capabilities": [
+            "workspace:read",
+            "workspace:write",
+            "terminal:send",
+            "terminal:read",
+            "storage:own",
+            "settings:own",
+            "notifications:show"
+          ],
+          "images": {
+            "icon": {
+              "path": "images/icon.png",
+              "alt": "Godot Engine logo",
+              "sha256": "087af4c72b692790fd6836b89487f50927381705dd4a9aeb732dfb1674b0f928",
+              "width": 256,
+              "height": 256
+            }
+          }
+        },
+        {
           "version": "0.1.1",
           "commit": "0818b6e7fa8cc5cbf37716237a607aeff54137cd",
           "contentHash": "f3b0646fc40d4a9a3fd278ed03fe81fd132dba235172a888b3bcab7ca40894ba",
