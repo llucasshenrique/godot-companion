@@ -341,7 +341,7 @@ function SceneRowCard(props: {
             icon="star"
             label={pinned ? `Unpin ${scene.name}` : `Pin ${scene.name}`}
             tooltip={pinned ? 'Unpin scene' : 'Pin scene'}
-            variant="ghost"
+            variant={pinned ? 'solid' : 'ghost'}
             tone={pinned ? 'warning' : 'neutral'}
             size="xs"
             onPress={() => void handleTogglePin(scene.resPath)}
