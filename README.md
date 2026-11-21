@@ -6,6 +6,8 @@ Sidebar panel and trusted-worker integration for **Godot Engine** (3.x / 4.x) in
 
 > Complements Orca's official `stablyai.orca-godot` syntax-highlighting plugin with live project inspection, scene launching, headless validation, export presets, and terminal log diagnostics.
 
+![Godot Companion panel: overview, scenes and headless check diagnostics](images/screenshot-dark.png)
+
 ## Features
 
 - **Project Overview**: Auto-detects `project.godot` (including monorepos with multiple Godot projects), parses engine features, renderer, viewport size, physics tick rate, autoload singletons, addons, and probes Godot Editor LSP port (`6005` by default).

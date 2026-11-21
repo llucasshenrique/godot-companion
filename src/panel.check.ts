@@ -139,7 +139,7 @@ const sampleSnapshot: GodotSnapshot = {
     openEditorDetached: true,
     notifyOnComplete: true
   },
-  refreshedAt: 1700000000000,
+  refreshedAt: Date.now() - 20_000,
   remoteWorkspaceWarning: null
 }
 
@@ -149,14 +149,14 @@ const runningWithDiagnosticsSnapshot: GodotSnapshot = {
     terminalId: 'term-godot-1',
     label: 'ship_base.tscn',
     kind: 'run',
-    startedAt: 1700000000000,
+    startedAt: Date.now() - 4 * 60_000,
     sceneResPath: 'res://scenes/levels/ship_base.tscn'
   },
   lastCheck: {
     ok: false,
     exitCode: 1,
     durationMs: 412,
-    checkedAt: 1700000000000,
+    checkedAt: Date.now() - 90_000,
     errorCount: 1,
     warningCount: 1,
     diagnostics: [
